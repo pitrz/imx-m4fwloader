@@ -43,28 +43,45 @@
     } while (0)
 #define LogError(...) printf(__VA_ARGS__)
 
-#define VERSION "1.0.0"
+#define VERSION "1.0.1"
 #define NAME_OF_UTILITY "i.MX M4 Loader"
 #define HEADER NAME_OF_UTILITY " - M4 firmware loader v. " VERSION "\n"
 
-#define IMX7D_SRC_M4RCR          (0x3039000C) /* reset register */
-#define IMX7D_STOP_CLEAR_MASK    (0xFFFFFF00)
-#define IMX7D_STOP_SET_MASK      (0x000000AA)
-#define IMX7D_START_CLEAR_MASK   (0xFFFFFFFF)
-#define IMX7D_START_SET_MASK     (0x00000001)
-#define IMX7D_MU_ATR1            (0x30AA0004) /* rpmsg_mu_kick_addr */
-#define IMX7D_M4_BOOTROM         (0x00180000) 
-#define IMX7D_CCM_ANALOG_PLL_480 (0x303600B0)
-#define IMX7D_CCM_CCGR1          (0x30384010)
+#define IMX7D_SRC_M4RCR                   (0x3039000C) /* reset register */
+#define IMX7D_STOP_CLEAR_MASK             (0xFFFFFF00)
+#define IMX7D_STOP_SET_MASK               (0x000000AA)
+#define IMX7D_START_CLEAR_MASK            (0xFFFFFFFF)
+#define IMX7D_START_SET_MASK              (0x00000001)
+#define IMX7D_MU_ATR1                     (0x30AA0004) /* rpmsg_mu_kick_addr */
+#define IMX7D_M4_BOOTROM                  (0x00180000)
+#define IMX7D_CCM_ANALOG_PLL_480          (0x303600B0)
+#define IMX7D_CCM_CCGR1                   (0x30384010)
+#define IMX7D_OCRAM_START_ADDR            (0x00900000)
+#define IMX7D_OCRAM_END_ADDR              (0x00947FFF) /* OCRAM + OCRAM_EPDC + OCRAM_PXP */
+#define IMX7D_OCRAM_M4_ALIAS_START_ADDR   (0x20200000)
+#define IMX7D_OCRAM_M4_ALIAS_END_ADDR     (0x20247FFF) /* OCRAM + OCRAM_EPDC + OCRAM_PXP */
 
-#define IMX6SX_SRC_SCR           (0x020D8000) /* reset register */
-#define IMX6SX_STOP_CLEAR_MASK   (0xFFFFFFEF)
-#define IMX6SX_STOP_SET_MASK     (0x00400000)
-#define IMX6SX_START_CLEAR_MASK  (0xFFFFFFFF)
-#define IMX6SX_START_SET_MASK    (0x00400010)
-#define IMX6SX_MU_ATR1           (0x02294004) /* rpmsg_mu_kick_addr */
-#define IMX6SX_M4_BOOTROM        (0x007F8000) 
-#define IMX6SX_CCM_CCGR3         (0x020C4074)
+#define IMX6SX_SRC_SCR                     (0x020D8000) /* reset register */
+#define IMX6SX_STOP_CLEAR_MASK             (0xFFFFFFEF)
+#define IMX6SX_STOP_SET_MASK               (0x00400000)
+#define IMX6SX_START_CLEAR_MASK            (0xFFFFFFFF)
+#define IMX6SX_START_SET_MASK              (0x00400010)
+#define IMX6SX_MU_ATR1                     (0x02294004) /* rpmsg_mu_kick_addr */
+#define IMX6SX_M4_BOOTROM                  (0x007F8000)
+#define IMX6SX_CCM_CCGR3                   (0x020C4074)
+#define IMX6SX_OCRAM_START_ADDR            (0x00900000)
+#define IMX6SX_OCRAM_END_ADDR              (0x0091FFFF) /* OCRAM 128KB */
+#define IMX6SX_OCRAM_ALIAS_START_ADDR      (0x00920000)
+#define IMX6SX_OCRAM_ALIAS_END_ADDR        (0x0093FFFF) /* OCRAM aliased 128KB */
+#define IMX6SX_OCRAM_M4_START_ADDR         (0x20900000)
+#define IMX6SX_OCRAM_M4_END_ADDR           (0x2091FFFF) /* OCRAM 128KB */
+#define IMX6SX_OCRAM_M4_ALIAS_START_ADDR   (0x20920000)
+#define IMX6SX_OCRAM_M4_ALIAS_END_ADDR     (0x2093FFFF) /* OCRAM aliased 128KB */
+
+#define IMX_TCM_START_ADDR       (0x007F8000) /* TCML  32KB */
+#define IMX_TCM_END_ADDR         (0x00807FFF) /* TCMU  32KB */
+#define IMX_TCM_M4_START_ADDR    (0x1FFF8000) /* TCML  32KB */
+#define IMX_TCM_M4_END_ADDR      (0x20007FFF) /* TCMU  32KB */
 
 #define MAP_SIZE 4096UL
 #define MAP_MASK (MAP_SIZE - 1)
@@ -74,6 +91,7 @@
 #define MAP_OCRAM_MASK (MAP_OCRAM_SIZE - 1)
 #define MAX_FILE_SIZE MAP_OCRAM_SIZE
 #define MAX_RETRIES 8
+#define MAX_FILE_SIZE_TCM (32 * 1024)
 
 #define RETURN_CODE_OK 0
 #define RETURN_CODE_ARGUMENTS_ERROR 1
@@ -189,6 +207,8 @@ static struct soc_specific socs[] = {
     }
 };
 
+static int currentSoC;
+
 void rpmsg_mu_kick(int fd, int socid, uint32_t vq_id)
 {
     off_t target;
@@ -261,7 +281,62 @@ void set_stack_pc(int fd, int socid, unsigned int stack, unsigned int pc)
     munmap(map_base, SIZE_16BYTE);
 }
 
-int load_m4_fw(int fd, int socid, char* filepath, unsigned int loadaddr)
+int check_load_addr(unsigned long* ldaddr, char* mt, unsigned long pc)
+{
+  /* Check if where we loading to looks familiar. Also if the address looks like an M4 address,
+   * return A7/A9 instead. Return 0(false) on any error.
+   * NOTE: Only does very minimal check for case your PC value and thus taret load address looks
+   * suspicious or wonkey, not much more. */
+  if (0 == ldaddr || 0 == mt){
+    LogError("%s - a NULL passed to load address checker:  bailing out.\n", NAME_OF_UTILITY);
+    return 0;
+  }
+
+  int ret = 0; // false
+
+  switch(currentSoC)
+  {
+    default:
+      LogError("%s - SoC id is not set to anything I know, bailing out.\n", NAME_OF_UTILITY);
+      break;
+    case 0:  //iMX7D
+      if ( (IMX7D_OCRAM_START_ADDR < pc && pc < IMX7D_OCRAM_END_ADDR)  ||
+          (IMX7D_OCRAM_M4_ALIAS_START_ADDR < pc && pc < IMX7D_OCRAM_M4_ALIAS_END_ADDR) ){
+        ret = 1;
+        *ldaddr = IMX7D_OCRAM_START_ADDR + (pc & 0x000f0000);  /* Align */
+        *mt = 'o';
+      }
+      else if ( (IMX_TCM_START_ADDR < pc && pc < IMX_TCM_END_ADDR) ||
+                (IMX_TCM_M4_START_ADDR < pc && pc < IMX_TCM_M4_END_ADDR) ){
+        ret = 1;
+        //Note: expects you to load it to TCML, by-the-book
+        *ldaddr = IMX_TCM_START_ADDR; /* Align */
+        *mt = 't';
+      }
+      break;
+    case 1: //iMX6Solo
+      if (  (IMX6SX_OCRAM_START_ADDR < pc && pc < IMX6SX_OCRAM_END_ADDR)  ||
+            (IMX6SX_OCRAM_ALIAS_START_ADDR < pc && pc < IMX6SX_OCRAM_ALIAS_END_ADDR) ||
+            (IMX6SX_OCRAM_M4_START_ADDR < pc && pc < IMX6SX_OCRAM_M4_END_ADDR) ||
+            (IMX6SX_OCRAM_M4_ALIAS_START_ADDR < pc && pc < IMX6SX_OCRAM_M4_ALIAS_END_ADDR ) ) {
+        *ldaddr = IMX6SX_OCRAM_START_ADDR + (pc & 0x000f0000);  /* Align */
+        ret = 1;
+        *mt = 'o';
+      }
+      else if ( (IMX_TCM_START_ADDR < pc && pc < IMX_TCM_END_ADDR) ||
+                (IMX_TCM_M4_START_ADDR < pc && pc < IMX_TCM_M4_END_ADDR) ) {
+        ret = 1;
+        //Note: expects you to load it to TCML, by-the-book
+        *ldaddr = IMX_TCM_START_ADDR; /* Align */
+        *mt = 't';
+      }
+      break;
+  }//switch(..)
+
+  return ret;
+}
+
+int load_m4_fw(int fd, int socid, char* filepath, unsigned long loadaddr)
 {
     int n;
     int size;
@@ -270,6 +345,7 @@ int load_m4_fw(int fd, int socid, char* filepath, unsigned int loadaddr)
     uint8_t* filebuffer;
     void *map_base, *virt_addr;
     unsigned long stack, pc;
+    char mt;
 
     fdf = fopen(filepath, "rb");
     fseek(fdf, 0, SEEK_END);
@@ -279,6 +355,7 @@ int load_m4_fw(int fd, int socid, char* filepath, unsigned int loadaddr)
         LogError("%s - File size too big, can't load: %d > %d \n", NAME_OF_UTILITY, size, MAX_FILE_SIZE);
         return -2;
     }
+
     filebuffer = malloc(size + 1);
     if (size != fread(filebuffer, sizeof(char), size, fdf)) {
         free(filebuffer);
@@ -290,9 +367,31 @@ int load_m4_fw(int fd, int socid, char* filepath, unsigned int loadaddr)
     stack = (filebuffer[0] | (filebuffer[1] << 8) | (filebuffer[2] << 16) | (filebuffer[3] << 24));
     pc = (filebuffer[4] | (filebuffer[5] << 8) | (filebuffer[6] << 16) | (filebuffer[7] << 24));
 
-    if (loadaddr == 0x0) {
-        loadaddr = pc & 0xFFFF0000; /* Align */
+    if (0 == loadaddr)
+    {
+      if ( !check_load_addr(&loadaddr, &mt, pc)) {
+        LogError("%s - Failed the check for a valid target load address. Bailing out...\n", NAME_OF_UTILITY);
+        free(filebuffer);
+        return -2;
+      }
+      if ('o' == mt) {
+        LogVerbose("%s - Your target memory type is .. %s\n", NAME_OF_UTILITY, "OCRAM");
+      }
+      else if ('t' == mt){
+        LogVerbose("%s: Your target memory type is .. %s\n", NAME_OF_UTILITY, "TCM");
+        if (size > MAX_FILE_SIZE_TCM ){
+          LogError("%s - File size too big for TCM, can't load: %d > %d \n", NAME_OF_UTILITY, size, MAX_FILE_SIZE_TCM);
+          free(filebuffer);
+          return -2;
+        }
+      }
+      else {
+        LogError("%s - Could not determine your target memory type, thus bailing out .. \n", NAME_OF_UTILITY);
+        free(filebuffer);
+        return -2;
+      }
     }
+
     LogVerbose("%s - FILENAME = %s; loadaddr = 0x%08x\n", NAME_OF_UTILITY, filepath, loadaddr);
 
     map_base = mmap(0, MAP_OCRAM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, loadaddr & ~MAP_OCRAM_MASK);
@@ -346,7 +445,7 @@ int main(int argc, char** argv)
     int m4TraceFlags = 0;
     int m4Retry;
     char* filepath = argv[1];
-    int currentSoC = -1;
+    currentSoC = -1;
 
     if (argc < 2) {
         LogError(HEADER);
@@ -354,8 +453,12 @@ int main(int argc, char** argv)
                  "%s [filename.bin] [0xLOADADDR] [--verbose]  # loads new firmware\n"
                  "or: %s stop                    # holds the auxiliary core in reset\n"
                  "or: %s start                   # releases the auxiliary core from reset\n"
-                 "or: %s kick [n]                # triggers interrupt on RPMsg virtqueue n\n",
+                 "or: %s kick [n]                # triggers interrupt on RPMsg virtqueue n\n"
+                 "\nSpecifying 0xLOADADDR = 0 makes the program determine the load address from the image file.\n"
+                 "You probably want to use it with 0(zero) for load address as this may be safer.\n",
             NAME_OF_UTILITY, argv[0], argv[0], argv[0], argv[0], argv[0]);
+        LogError("\nNOTE1: For TCM memory, can only load 32KB image\n");
+        LogError("NOTE2: LIMITATION: For OCRAM, currently can only load 64KB image\n\n");
         return RETURN_CODE_ARGUMENTS_ERROR;
     }
 
