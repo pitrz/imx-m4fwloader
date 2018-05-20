@@ -267,7 +267,7 @@ int load_m4_fw(int fd, int socid, char* filepath, unsigned int loadaddr)
     int size;
     FILE* fdf;
     off_t target;
-    char* filebuffer;
+    uint8_t* filebuffer;
     void *map_base, *virt_addr;
     unsigned long stack, pc;
 
@@ -279,7 +279,7 @@ int load_m4_fw(int fd, int socid, char* filepath, unsigned int loadaddr)
         LogError("%s - File size too big, can't load: %d > %d \n", NAME_OF_UTILITY, size, MAX_FILE_SIZE);
         return -2;
     }
-    filebuffer = (char*)malloc(size + 1);
+    filebuffer = malloc(size + 1);
     if (size != fread(filebuffer, sizeof(char), size, fdf)) {
         free(filebuffer);
         return -2;
