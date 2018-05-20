@@ -1,6 +1,12 @@
 # imx-m4fwloader
 Tool for loading firmware to M4 core on i.MX6SX and i.MX7D from Linux user space.
 
+## NOTE: This is a fork of the original imx-m4fwloader, providing bugfixes & improvements.
+ - By current test 'subject' is iMX7D SoC (on a couple of different boards)
+ - At the moment I have no access to iMX6SX, and thus cannot test or do any related changes.
+
+Denis Ryndine : dry@embedded-synergy.co.za
+
 ### How to use this
 - Use the environment provided to you by Yocto:
 	- For example:
