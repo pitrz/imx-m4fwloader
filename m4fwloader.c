@@ -43,7 +43,7 @@
     } while (0)
 #define LogError(...) printf(__VA_ARGS__)
 
-#define VERSION "1.0.1"
+#define VERSION "1.0.2"
 #define NAME_OF_UTILITY "i.MX M4 Loader"
 #define HEADER NAME_OF_UTILITY " - M4 firmware loader v. " VERSION "\n"
 
@@ -87,7 +87,7 @@
 #define MAP_MASK (MAP_SIZE - 1)
 #define SIZE_4BYTE 4UL
 #define SIZE_16BYTE 16UL
-#define MAP_OCRAM_SIZE 64 * 1024
+#define MAP_OCRAM_SIZE 128 * 1024
 #define MAP_OCRAM_MASK (MAP_OCRAM_SIZE - 1)
 #define MAX_FILE_SIZE MAP_OCRAM_SIZE
 #define MAX_RETRIES 8
@@ -351,8 +351,10 @@ int load_m4_fw(int fd, int socid, char* filepath, unsigned long loadaddr)
     fseek(fdf, 0, SEEK_END);
     size = ftell(fdf);
     fseek(fdf, 0, SEEK_SET);
+    LogVerbose("%s - your binary size : %u /  0x%08x ...\n", NAME_OF_UTILITY, size, size);
+
     if (size > MAX_FILE_SIZE) {
-        LogError("%s - File size too big, can't load: %d > %d \n", NAME_OF_UTILITY, size, MAX_FILE_SIZE);
+        LogError("%s - FAIL: File size too big, I wouldn't know how to load it: %d > %d. Bailing out.\n", NAME_OF_UTILITY, size, MAX_FILE_SIZE);
         return -2;
     }
 
@@ -378,7 +380,7 @@ int load_m4_fw(int fd, int socid, char* filepath, unsigned long loadaddr)
         LogVerbose("%s - Your target memory type is .. %s\n", NAME_OF_UTILITY, "OCRAM");
       }
       else if ('t' == mt){
-        LogVerbose("%s: Your target memory type is .. %s\n", NAME_OF_UTILITY, "TCM");
+        LogVerbose("%s - Your target memory type is .. %s\n", NAME_OF_UTILITY, "TCM");
         if (size > MAX_FILE_SIZE_TCM ){
           LogError("%s - File size too big for TCM, can't load: %d > %d \n", NAME_OF_UTILITY, size, MAX_FILE_SIZE_TCM);
           free(filebuffer);
@@ -458,7 +460,7 @@ int main(int argc, char** argv)
                  "You probably want to use it with 0(zero) for load address as this may be safer.\n",
             NAME_OF_UTILITY, argv[0], argv[0], argv[0], argv[0], argv[0]);
         LogError("\nNOTE1: For TCM memory, can only load 32KB image\n");
-        LogError("NOTE2: LIMITATION: For OCRAM, currently can only load 64KB image\n\n");
+        LogError(  "NOTE2: For OCRAM, (currently) can only load 128KB image\n\n");
         return RETURN_CODE_ARGUMENTS_ERROR;
     }
 
