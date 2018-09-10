@@ -35,6 +35,9 @@
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <time.h>
+#include <assert.h>
 
 #define LogVerbose(...)          \
     do {                         \
@@ -43,15 +46,23 @@
     } while (0)
 #define LogError(...) printf(__VA_ARGS__)
 
-#define VERSION "1.0.2"
+#define VERSION "1.0.3"
 #define NAME_OF_UTILITY "i.MX M4 Loader"
 #define HEADER NAME_OF_UTILITY " - M4 firmware loader v. " VERSION "\n"
 
+#define IMX7D_ENABLE_M4                   (0x08)
+#define IMX7D_SW_M4P_RST                  (0x04)
+#define IMX7D_SW_M4C_RST                  (0x02)
+#define IMX7D_SW_M4C_NON_SCLR_RST         (0x01)
+#define IMX7D_M4_SW_FULL_RST              (IMX7D_SW_M4P_RST | IMX7D_SW_M4C_RST)
+#define IMX7D_M4_RST_CLEAR_MASK           ~(IMX7D_M4_SW_FULL_RST | \
+                                            IMX7D_SW_M4C_NON_SCLR_RST)
+
 #define IMX7D_SRC_M4RCR                   (0x3039000C) /* reset register */
-#define IMX7D_STOP_CLEAR_MASK             (0xFFFFFF00)
-#define IMX7D_STOP_SET_MASK               (0x000000AC)
-#define IMX7D_START_CLEAR_MASK            (0xFFFFFFFF)
-#define IMX7D_START_SET_MASK              (0x000000AA)
+#define IMX7D_STOP_CLEAR_MASK             (IMX7D_M4_RST_CLEAR_MASK)
+#define IMX7D_STOP_SET_MASK               (IMX7D_SW_M4C_NON_SCLR_RST)
+#define IMX7D_START_CLEAR_MASK            (IMX7D_M4_RST_CLEAR_MASK)
+#define IMX7D_START_SET_MASK              (IMX7D_ENABLE_M4 | IMX7D_SW_M4C_RST)
 #define IMX7D_MU_ATR1                     (0x30AA0004) /* rpmsg_mu_kick_addr */
 #define IMX7D_M4_BOOTROM                  (0x00180000)
 #define IMX7D_CCM_ANALOG_PLL_480          (0x303600B0)
@@ -97,6 +108,12 @@
 #define RETURN_CODE_ARGUMENTS_ERROR 1
 #define RETURN_CODE_M4STOP_FAILED 2
 #define RETURN_CODE_M4START_FAILED 3
+
+/* Utility */
+void timediff(const struct timespec* start, const struct timespec* end, struct timespec* td);
+
+/* Helpers */
+void wait_bits_cleared(unsigned long *vaddr, unsigned long wval, unsigned long mask);
 
 struct soc_specific {
     char* detect_name;
@@ -244,7 +261,34 @@ void stop_cpu(int fd, int socid)
     map_base = mmap(0, SIZE_4BYTE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
     virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
     read_result = *((unsigned long*)virt_addr);
-    *((unsigned long*)virt_addr) = (read_result & (socs[socid].stop_and)) | socs[socid].stop_or;
+
+    if (!strcmp("i.MX7 Dual", socs[socid].detect_name)){
+      /* A special handling as not tested on MX6 yet. */
+      *((unsigned long*)virt_addr) = (read_result & (socs[socid].stop_and)) | IMX7D_SW_M4C_NON_SCLR_RST;
+      read_result = *((unsigned long*)virt_addr);
+      assert(read_result & IMX7D_SW_M4C_NON_SCLR_RST);
+
+      /* After setting non-self clearing, the M4RCR is the same (at least for M4 reset and enable bits)
+       * as after POR : M4C_RST & M4C_NON_SCLR_RST are on holding core in reset, while M4 is enabled.
+       * Next we reset the M4 platform / M4P_RST, which does not clear core reset bits.
+       * (And before uploading new firmware, as correct per steps in AN5317).
+       *
+       * Notes: the latest IMX7DRM (2018) and previous have incorrect reset bit values for the core
+       * reset bits, both should be 1 after POR. [ref my NXP support case]
+       *
+       * [ ref reset discussion thread : https://community.nxp.com/thread/482778 ]
+       */
+
+      LogVerbose("%s - M4RCR val after M4C_NON_SCLR_RST stop = 0x%08lX ..\n", NAME_OF_UTILITY, read_result);
+      wait_bits_cleared( virt_addr,
+          (read_result & (socs[socid].stop_and) ) | (IMX7D_SW_M4P_RST | IMX7D_SW_M4C_NON_SCLR_RST),
+              IMX7D_SW_M4P_RST );
+      read_result = *((unsigned long*)virt_addr);
+      LogVerbose("%s - M4RCR val after M4P_RST  = 0x%08lX ..\n", NAME_OF_UTILITY, read_result);
+    }
+    else {
+      *((unsigned long*)virt_addr) = (read_result & (socs[socid].stop_and)) | socs[socid].stop_or;
+    }
     munmap(virt_addr, SIZE_4BYTE);
     regshow(socs[socid].src_m4reg_addr, "STOP - after", fd);
 }
@@ -263,7 +307,16 @@ void start_cpu(int fd, int socid)
     map_base = mmap(0, SIZE_4BYTE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
     virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
     read_result = *((unsigned long*)virt_addr);
-    *((unsigned long*)virt_addr) = (read_result & (socs[socid].start_and)) | socs[socid].start_or;
+    if (!strcmp("i.MX7 Dual", socs[socid].detect_name)){
+      /* A special handling as not tested on MX6 yet. The start masks sets platform/core _self-clearing_
+       * bits. These we should wait for to be cleared, to know that the resets finished. */
+      /* TODO: it's likely 'correct' to do platform reset in stop. */
+        wait_bits_cleared( virt_addr,
+            (read_result & (socs[socid].start_and)) | socs[socid].start_or,
+            IMX7D_SW_M4C_RST );
+    }
+    else
+      *((unsigned long*)virt_addr) = (read_result & (socs[socid].start_and)) | socs[socid].start_or;
     munmap(virt_addr, SIZE_4BYTE);
     regshow(socs[socid].src_m4reg_addr, "START -after", fd);
 }
@@ -534,4 +587,51 @@ int main(int argc, char** argv)
     LogVerbose("Done!\n");
     close(fd);
     return RETURN_CODE_OK;
+}
+
+
+/* Utility */
+void timediff(const struct timespec* start, const struct timespec* end, struct timespec* td)
+{
+  if ((end->tv_nsec-start->tv_nsec)<0) {
+    td->tv_sec = end->tv_sec-start->tv_sec-1;
+    td->tv_nsec = 1000000000+end->tv_nsec-start->tv_nsec;
+  } else {
+    td->tv_sec = end->tv_sec-start->tv_sec;
+    td->tv_nsec = end->tv_nsec-start->tv_nsec;
+  }
+}
+
+/* Helpers */
+void wait_bits_cleared(unsigned long *vaddr, unsigned long wval, unsigned long mask)
+{
+
+  unsigned long read_result;
+  struct timespec start = {0, 0}, end = {0,0}, td= {0,0};
+  const unsigned NANOS_MAX = 10000000;
+  unsigned iters= 0;
+
+  if (0 != clock_gettime(CLOCK_REALTIME, &start)){
+    LogError("%s - Failed to gettime; waiting for reset bits won't be accurate.\n", NAME_OF_UTILITY);
+  }
+
+  *vaddr = wval;
+
+  while (true){
+    read_result = *vaddr;
+    if (0 != clock_gettime(CLOCK_REALTIME, &end)){
+      iters += 10000; //a random number ...
+      end.tv_nsec = end.tv_sec = 0;
+    }
+    else
+      timediff(&start, &end, &td);
+    if (!(read_result & mask)){
+      LogVerbose("%s - waited %lu nanos / %u iters till mask = 0x%08lX to clear.\n", NAME_OF_UTILITY, td.tv_nsec, iters, mask);
+      break;
+    }
+    if (NANOS_MAX < td.tv_nsec || NANOS_MAX < iters) {
+      LogVerbose("%s - !TIMEOUT! %lu nanos / %u iters waiting for mask = 0x%08lX to clear.\n", NAME_OF_UTILITY, td.tv_nsec, iters, mask);
+      break;
+    }
+  }
 }
