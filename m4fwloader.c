@@ -21,6 +21,10 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *
+ * --------------------------------------------------------------------------------
+ *  05.10.2018, D.RY: This is a modified & extended version of the original.
+ *    Denis Ryndine <dry@embedded-synergy.co.za>
+ * --------------------------------------------------------------------------------
  */
 
 #include <stdio.h>
@@ -46,7 +50,7 @@
     } while (0)
 #define LogError(...) printf(__VA_ARGS__)
 
-#define VERSION "1.0.3"
+#define VERSION "1.0.4"
 #define NAME_OF_UTILITY "i.MX M4 Loader"
 #define HEADER NAME_OF_UTILITY " - M4 firmware loader v. " VERSION "\n"
 
@@ -98,9 +102,9 @@
 #define MAP_MASK (MAP_SIZE - 1)
 #define SIZE_4BYTE 4UL
 #define SIZE_16BYTE 16UL
-#define MAP_OCRAM_SIZE 128 * 1024
-#define MAP_OCRAM_MASK (MAP_OCRAM_SIZE - 1)
-#define MAX_FILE_SIZE MAP_OCRAM_SIZE
+#define MAP_OCRAM_IMX6_SIZE (IMX6SX_OCRAM_END_ADDR-IMX6SX_OCRAM_START_ADDR+1)
+#define MAP_OCRAM_IMX7_SIZE (IMX7D_OCRAM_END_ADDR-IMX7D_OCRAM_START_ADDR+1)
+#define MAP_OCRAM_MASK(rz) ((rz) - 1)
 #define MAX_RETRIES 8
 #define MAX_FILE_SIZE_TCM (32 * 1024)
 
@@ -223,6 +227,23 @@ static struct soc_specific socs[] = {
         IMX6SX_M4_BOOTROM
     }
 };
+
+enum sock_id_t {
+  SOCK_ID_IMX7 = 0,
+  SOCK_ID_IMX6 = 1
+};
+
+size_t map_ocram_size(int soc_id) {
+  if (SOCK_ID_IMX7==soc_id)
+    return MAP_OCRAM_IMX7_SIZE;
+  else if (SOCK_ID_IMX7==soc_id)
+    return MAP_OCRAM_IMX6_SIZE;
+  return 0;
+}
+
+size_t max_file_size(int soc_id) {
+  return map_ocram_size(soc_id);
+}
 
 static int currentSoC;
 
@@ -356,7 +377,7 @@ int check_load_addr(unsigned long* ldaddr, char* mt, unsigned long pc)
       if ( (IMX7D_OCRAM_START_ADDR < pc && pc < IMX7D_OCRAM_END_ADDR)  ||
           (IMX7D_OCRAM_M4_ALIAS_START_ADDR < pc && pc < IMX7D_OCRAM_M4_ALIAS_END_ADDR) ){
         ret = 1;
-        *ldaddr = IMX7D_OCRAM_START_ADDR + (pc & 0x000f0000);  /* Align */
+        *ldaddr = IMX7D_OCRAM_START_ADDR + (pc & 0x00078000);  /* Align */
         *mt = 'o';
       }
       else if ( (IMX_TCM_START_ADDR < pc && pc < IMX_TCM_END_ADDR) ||
@@ -372,7 +393,7 @@ int check_load_addr(unsigned long* ldaddr, char* mt, unsigned long pc)
             (IMX6SX_OCRAM_ALIAS_START_ADDR < pc && pc < IMX6SX_OCRAM_ALIAS_END_ADDR) ||
             (IMX6SX_OCRAM_M4_START_ADDR < pc && pc < IMX6SX_OCRAM_M4_END_ADDR) ||
             (IMX6SX_OCRAM_M4_ALIAS_START_ADDR < pc && pc < IMX6SX_OCRAM_M4_ALIAS_END_ADDR ) ) {
-        *ldaddr = IMX6SX_OCRAM_START_ADDR + (pc & 0x000f0000);  /* Align */
+        *ldaddr = IMX6SX_OCRAM_START_ADDR + (pc & 0x00078000);  /* Align */
         ret = 1;
         *mt = 'o';
       }
@@ -398,7 +419,8 @@ int load_m4_fw(int fd, int socid, char* filepath, unsigned long loadaddr)
     uint8_t* filebuffer;
     void *map_base, *virt_addr;
     unsigned long stack, pc;
-    char mt;
+    char mt = '\0';
+    size_t ocrsz;
 
     fdf = fopen(filepath, "rb");
     fseek(fdf, 0, SEEK_END);
@@ -406,8 +428,8 @@ int load_m4_fw(int fd, int socid, char* filepath, unsigned long loadaddr)
     fseek(fdf, 0, SEEK_SET);
     LogVerbose("%s - your binary size : %u /  0x%08x ...\n", NAME_OF_UTILITY, size, size);
 
-    if (size > MAX_FILE_SIZE) {
-        LogError("%s - FAIL: File size too big, I wouldn't know how to load it: %d > %d. Bailing out.\n", NAME_OF_UTILITY, size, MAX_FILE_SIZE);
+    if (size > max_file_size(socid)) {
+        LogError("%s - FAIL: File size too big, I wouldn't know how to load it: %d > %d. Bailing out.\n", NAME_OF_UTILITY, size, max_file_size(socid));
         return -2;
     }
 
@@ -449,13 +471,25 @@ int load_m4_fw(int fd, int socid, char* filepath, unsigned long loadaddr)
 
     LogVerbose("%s - FILENAME = %s; loadaddr = 0x%08x\n", NAME_OF_UTILITY, filepath, loadaddr);
 
-    map_base = mmap(0, MAP_OCRAM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, loadaddr & ~MAP_OCRAM_MASK);
-    LogVerbose("%s - start - end (0x%08x - 0x%08x)\n", NAME_OF_UTILITY, loadaddr & ~MAP_OCRAM_MASK, (loadaddr & ~MAP_OCRAM_MASK) + MAP_OCRAM_SIZE);
-    virt_addr = (unsigned char*)(map_base + (loadaddr & MAP_OCRAM_MASK));
-    memcpy(virt_addr, filebuffer, size);
-    munmap(map_base, MAP_OCRAM_SIZE);
+    //Note that no matter where you loading, and actual filesize, it's the chunk of OCRAM size that
+    //gets mapped. OCRAM > TCM, so that case is ok.
+    //Beware boundaries not checked too, e.g. if loadaddr is in middle of OCRAM and size goes over
+    //the end, prepare for happy surprise.
+    ocrsz = map_ocram_size(socid);
 
-    LogVerbose("Will set PC and STACK...");
+    map_base = mmap(0, ocrsz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, loadaddr & ~MAP_OCRAM_MASK(ocrsz));
+    LogVerbose("%s: mmap'ed start - end (0x%08x - 0x%08x)\n",
+        NAME_OF_UTILITY,
+        loadaddr & ~MAP_OCRAM_MASK(ocrsz),
+        (loadaddr & ~MAP_OCRAM_MASK(ocrsz)) + ocrsz );
+
+    virt_addr = (unsigned char*)(map_base + (loadaddr & MAP_OCRAM_MASK(ocrsz)));
+    LogVerbose("%s: mmap'ed vbase, virt_addr: 0x%08x,  0x%08x\n", NAME_OF_UTILITY, map_base, virt_addr);
+
+    memcpy(virt_addr, filebuffer, size);
+    munmap(map_base, ocrsz);
+
+    LogVerbose("%s: Will set PC %x and STACK %x...", NAME_OF_UTILITY, pc, stack);
     set_stack_pc(fd, socid, stack, pc);
     LogVerbose("...Done\n");
     free(filebuffer);
@@ -510,10 +544,10 @@ int main(int argc, char** argv)
                  "or: %s start                   # releases the auxiliary core from reset\n"
                  "or: %s kick [n]                # triggers interrupt on RPMsg virtqueue n\n"
                  "\nSpecifying 0xLOADADDR = 0 makes the program determine the load address from the image file.\n"
-                 "You probably want to use it with 0(zero) for load address as this may be safer.\n",
-            NAME_OF_UTILITY, argv[0], argv[0], argv[0], argv[0], argv[0]);
+                 "You probably want to use it with 0(zero) for load address as this _could_ be safer.\n",
+            NAME_OF_UTILITY, argv[0], argv[0], argv[0], argv[0] );
         LogError("\nNOTE1: For TCM memory, can only load 32KB image\n");
-        LogError(  "NOTE2: For OCRAM, (currently) can only load 128KB image\n\n");
+        LogError(  "NOTE2: For OCRAM, can load 128KB image on iMX6, and 288KB on iMX7\n\n");
         return RETURN_CODE_ARGUMENTS_ERROR;
     }
 
