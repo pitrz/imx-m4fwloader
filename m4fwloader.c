@@ -86,7 +86,6 @@
 #define IMX6SX_M4_RST_CLEAR_MASK      ~(IMX6SX_M4_SW_FULL_RST|IMX6SX_SW_M4C_NON_SCLR_RST)
 
 #define IMX6SX_SRC_SCR                     (0x020D8000) /* reset register */
-
 #define IMX6SX_STOP_CLEAR_MASK             (IMX6SX_M4_RST_CLEAR_MASK)
 #define IMX6SX_STOP_SET_MASK               (IMX6SX_SW_M4C_NON_SCLR_RST)
 #define IMX6SX_START_CLEAR_MASK            (IMX6SX_M4_RST_CLEAR_MASK)
@@ -102,12 +101,6 @@
 #define IMX6SX_OCRAM_M4_END_ADDR           (0x2091FFFF) /* OCRAM 128KB */
 #define IMX6SX_OCRAM_M4_ALIAS_START_ADDR   (0x20920000)
 #define IMX6SX_OCRAM_M4_ALIAS_END_ADDR     (0x2093FFFF) /* OCRAM aliased 128KB */
-
-
-#define IMX6SX_M4_START			(IMX6SX_ENABLE_M4 | IMX6SX_SW_M4P_RST | IMX6SX_SW_M4C_RST)
-#define IMX6SX_M4_STOP			IMX6SX_SW_M4C_NON_SCLR_RST
-#define IMX6SX_M4_RST_MASK		(IMX6SX_ENABLE_M4 | IMX6SX_SW_M4P_RST | IMX6SX_SW_M4C_NON_SCLR_RST | IMX6SX_SW_M4C_RST)
-
 
 
 #define IMX_TCM_START_ADDR       (0x007F8000) /* TCML  32KB */
@@ -327,8 +320,6 @@ void stop_cpu(int fd, int socid)
     else {
 
       LogVerbose("%s - M4RCR value before stop = 0x%08lX ..\n", NAME_OF_UTILITY, read_result);
-
-
         // NEED TO HOLD CORE IN RESET OTHERWISE BAD THINGS HAPPEN - EVERYTHING MIGHT FREEZE
         *((unsigned long*)virt_addr) = (read_result & (socs[socid].stop_and)) | IMX6SX_SW_M4C_NON_SCLR_RST;
         read_result = *((unsigned long*)virt_addr);
