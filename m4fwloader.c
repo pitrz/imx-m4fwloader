@@ -76,11 +76,20 @@
 #define IMX7D_OCRAM_M4_ALIAS_START_ADDR   (0x20200000)
 #define IMX7D_OCRAM_M4_ALIAS_END_ADDR     (0x20247FFF) /* OCRAM + OCRAM_EPDC + OCRAM_PXP */
 
+
+
+#define IMX6SX_ENABLE_M4	   (0x00400000)
+#define IMX6SX_SW_M4P_RST		   (0x00001000) /* Platform Reset mask for SRC_SCR */
+#define IMX6SX_SW_M4C_RST		   (0x4)
+#define IMX6SX_SW_M4C_NON_SCLR_RST	   (0x10)
+#define IMX6SX_M4_SW_FULL_RST	   (IMX6SX_SW_M4P_RST|IMX6SX_SW_M4C_RST)
+#define IMX6SX_M4_RST_CLEAR_MASK      ~(IMX6SX_M4_SW_FULL_RST|IMX6SX_SW_M4C_NON_SCLR_RST)
+
 #define IMX6SX_SRC_SCR                     (0x020D8000) /* reset register */
-#define IMX6SX_STOP_CLEAR_MASK             (0xFFFFFFEF)
-#define IMX6SX_STOP_SET_MASK               (0x00400000)
-#define IMX6SX_START_CLEAR_MASK            (0xFFFFFFFF)
-#define IMX6SX_START_SET_MASK              (0x00400010)
+#define IMX6SX_STOP_CLEAR_MASK             (IMX6SX_M4_RST_CLEAR_MASK)
+#define IMX6SX_STOP_SET_MASK               (IMX6SX_SW_M4C_NON_SCLR_RST)
+#define IMX6SX_START_CLEAR_MASK            (IMX6SX_M4_RST_CLEAR_MASK)
+#define IMX6SX_START_SET_MASK              (IMX6SX_ENABLE_M4|IMX6SX_SW_M4C_RST)
 #define IMX6SX_MU_ATR1                     (0x02294004) /* rpmsg_mu_kick_addr */
 #define IMX6SX_M4_BOOTROM                  (0x007F8000)
 #define IMX6SX_CCM_CCGR3                   (0x020C4074)
@@ -92,6 +101,7 @@
 #define IMX6SX_OCRAM_M4_END_ADDR           (0x2091FFFF) /* OCRAM 128KB */
 #define IMX6SX_OCRAM_M4_ALIAS_START_ADDR   (0x20920000)
 #define IMX6SX_OCRAM_M4_ALIAS_END_ADDR     (0x2093FFFF) /* OCRAM aliased 128KB */
+
 
 #define IMX_TCM_START_ADDR       (0x007F8000) /* TCML  32KB */
 #define IMX_TCM_END_ADDR         (0x00807FFF) /* TCMU  32KB */
@@ -136,7 +146,7 @@ struct soc_specific {
     uint32_t stack_pc_addr;
 };
 
-static int verbose = 0;
+static int verbose = 1;
 
 void regshow(uint32_t addr, char* name, int fd)
 {
@@ -236,7 +246,7 @@ enum sock_id_t {
 size_t map_ocram_size(int soc_id) {
   if (SOCK_ID_IMX7==soc_id)
     return MAP_OCRAM_IMX7_SIZE;
-  else if (SOCK_ID_IMX7==soc_id)
+  else if (SOCK_ID_IMX6==soc_id)
     return MAP_OCRAM_IMX6_SIZE;
   return 0;
 }
@@ -308,7 +318,19 @@ void stop_cpu(int fd, int socid)
       LogVerbose("%s - M4RCR val after M4P_RST  = 0x%08lX ..\n", NAME_OF_UTILITY, read_result);
     }
     else {
-      *((unsigned long*)virt_addr) = (read_result & (socs[socid].stop_and)) | socs[socid].stop_or;
+
+      LogVerbose("%s - M4RCR value before stop = 0x%08lX ..\n", NAME_OF_UTILITY, read_result);
+        // NEED TO HOLD CORE IN RESET OTHERWISE BAD THINGS HAPPEN - EVERYTHING MIGHT FREEZE
+        *((unsigned long*)virt_addr) = (read_result & (socs[socid].stop_and)) | IMX6SX_SW_M4C_NON_SCLR_RST;
+        read_result = *((unsigned long*)virt_addr);
+        assert(read_result & IMX6SX_SW_M4C_NON_SCLR_RST);
+
+        wait_bits_cleared( virt_addr,
+                           (read_result & (socs[socid].stop_and) ) | (IMX6SX_SW_M4P_RST | IMX6SX_SW_M4C_NON_SCLR_RST),
+                           IMX6SX_SW_M4P_RST );
+
+        read_result = *((unsigned long*)virt_addr);
+      LogVerbose("%s - M4RCR value after reset  = 0x%08lX ..\n", NAME_OF_UTILITY, read_result);
     }
     munmap(virt_addr, SIZE_4BYTE);
     regshow(socs[socid].src_m4reg_addr, "STOP - after", fd);
@@ -328,6 +350,8 @@ void start_cpu(int fd, int socid)
     map_base = mmap(0, SIZE_4BYTE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
     virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
     read_result = *((unsigned long*)virt_addr);
+
+
     if (!strcmp("i.MX7 Dual", socs[socid].detect_name)){
       /* A special handling as not tested on MX6 yet. The start masks sets platform/core _self-clearing_
        * bits. These we should wait for to be cleared, to know that the resets finished. */
@@ -337,7 +361,13 @@ void start_cpu(int fd, int socid)
             IMX7D_SW_M4C_RST );
     }
     else
-      *((unsigned long*)virt_addr) = (read_result & (socs[socid].start_and)) | socs[socid].start_or;
+    {
+
+        wait_bits_cleared( virt_addr,
+                           (read_result & (socs[socid].start_and)) | socs[socid].start_or ,
+                           IMX6SX_SW_M4C_RST );
+
+    }
     munmap(virt_addr, SIZE_4BYTE);
     regshow(socs[socid].src_m4reg_addr, "START -after", fd);
 }
