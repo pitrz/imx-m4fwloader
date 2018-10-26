@@ -50,7 +50,7 @@
     } while (0)
 #define LogError(...) printf(__VA_ARGS__)
 
-#define VERSION "1.0.4"
+#define VERSION "1.0.5"
 #define NAME_OF_UTILITY "i.MX M4 Loader"
 #define HEADER NAME_OF_UTILITY " - M4 firmware loader v. " VERSION "\n"
 
@@ -77,13 +77,12 @@
 #define IMX7D_OCRAM_M4_ALIAS_END_ADDR     (0x20247FFF) /* OCRAM + OCRAM_EPDC + OCRAM_PXP */
 
 
-
-#define IMX6SX_ENABLE_M4	   (0x00400000)
-#define IMX6SX_SW_M4P_RST		   (0x00001000) /* Platform Reset mask for SRC_SCR */
-#define IMX6SX_SW_M4C_RST		   (0x4)
-#define IMX6SX_SW_M4C_NON_SCLR_RST	   (0x10)
-#define IMX6SX_M4_SW_FULL_RST	   (IMX6SX_SW_M4P_RST|IMX6SX_SW_M4C_RST)
-#define IMX6SX_M4_RST_CLEAR_MASK      ~(IMX6SX_M4_SW_FULL_RST|IMX6SX_SW_M4C_NON_SCLR_RST)
+#define IMX6SX_ENABLE_M4	                 (0x00400000)
+#define IMX6SX_SW_M4P_RST		               (0x00001000) /* Platform Reset mask for SRC_SCR */
+#define IMX6SX_SW_M4C_RST		               (0x4)
+#define IMX6SX_SW_M4C_NON_SCLR_RST	       (0x10)
+#define IMX6SX_M4_SW_FULL_RST	             (IMX6SX_SW_M4P_RST|IMX6SX_SW_M4C_RST)
+#define IMX6SX_M4_RST_CLEAR_MASK           ~(IMX6SX_M4_SW_FULL_RST|IMX6SX_SW_M4C_NON_SCLR_RST)
 
 #define IMX6SX_SRC_SCR                     (0x020D8000) /* reset register */
 #define IMX6SX_STOP_CLEAR_MASK             (IMX6SX_M4_RST_CLEAR_MASK)
@@ -146,7 +145,7 @@ struct soc_specific {
     uint32_t stack_pc_addr;
 };
 
-static int verbose = 1;
+static int verbose = 0;
 
 void regshow(uint32_t addr, char* name, int fd)
 {
@@ -355,7 +354,6 @@ void start_cpu(int fd, int socid)
     if (!strcmp("i.MX7 Dual", socs[socid].detect_name)){
       /* A special handling as not tested on MX6 yet. The start masks sets platform/core _self-clearing_
        * bits. These we should wait for to be cleared, to know that the resets finished. */
-      /* TODO: it's likely 'correct' to do platform reset in stop. */
         wait_bits_cleared( virt_addr,
             (read_result & (socs[socid].start_and)) | socs[socid].start_or,
             IMX7D_SW_M4C_RST );
