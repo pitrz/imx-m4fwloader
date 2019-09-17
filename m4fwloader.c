@@ -102,6 +102,35 @@
 #define IMX6SX_OCRAM_M4_ALIAS_END_ADDR     (0x2093FFFF) /* OCRAM aliased 128KB */
 
 
+#define IMX8MM_ENABLE_M4                   (0x08)
+#define IMX8MM_SW_M4P_RST                  (0x04)
+#define IMX8MM_SW_M4C_RST                  (0x02)
+#define IMX8MM_SW_M4C_NON_SCLR_RST         (0x01)
+#define IMX8MM_M4_SW_FULL_RST              (IMX8MM_SW_M4P_RST | IMX8MM_SW_M4C_RST)
+#define IMX8MM_M4_RST_CLEAR_MASK           ~(IMX8MM_M4_SW_FULL_RST | \
+                                            IMX8MM_SW_M4C_NON_SCLR_RST)
+
+#define IMX8MM_SRC_M4RCR                   (0x3039000C) /* reset register */
+#define IMX8MM_STOP_CLEAR_MASK             (IMX8MM_M4_RST_CLEAR_MASK)
+#define IMX8MM_STOP_SET_MASK               (IMX8MM_SW_M4C_NON_SCLR_RST)
+#define IMX8MM_START_CLEAR_MASK            (IMX8MM_M4_RST_CLEAR_MASK)
+#define IMX8MM_START_SET_MASK              (IMX8MM_ENABLE_M4 | IMX8MM_SW_M4C_RST)
+
+#define IMX8MM_MU_ATR1                     (0x30AA0004) /* rpmsg_mu_kick_addr */
+#define IMX8MM_M4_BOOTROM                  (0x00180000)
+
+//#define IMX7D_CCM_ANALOG_PLL_480          (0x303600B0)
+#define IMX8MM_CCM_CCGR1                   (0x30384010)
+
+#define IMX8MM_OCRAM_START_ADDR            (0x00900000)
+#define IMX8MM_OCRAM_END_ADDR              (0x0093FFFF) /* OCRAM 128KB + OCRAM 128KB */
+#define IMX8MM_OCRAM_M4_ALIAS_START_ADDR   (0x20200000)
+#define IMX8MM_OCRAM_M4_ALIAS_END_ADDR     (0x2023FFFF) /* OCRAM 128KB + OCRAM 128KB */
+
+
+
+
+// TODO: VALIDATE TCM RANGES FOR IMX8M
 #define IMX_TCM_START_ADDR       (0x007F8000) /* TCML  32KB */
 #define IMX_TCM_END_ADDR         (0x00807FFF) /* TCMU  32KB */
 #define IMX_TCM_M4_START_ADDR    (0x1FFF8000) /* TCML  32KB */
@@ -126,7 +155,7 @@
 void timediff(const struct timespec* start, const struct timespec* end, struct timespec* td);
 
 /* Helpers */
-void wait_bits_cleared(unsigned long *vaddr, unsigned long wval, unsigned long mask);
+void wait_bits_cleared(uint32_t *vaddr,uint32_t wval, uint32_t mask);
 
 struct soc_specific {
     char* detect_name;
@@ -145,7 +174,7 @@ struct soc_specific {
     uint32_t stack_pc_addr;
 };
 
-static int verbose = 0;
+static int verbose = 1;
 
 void regshow(uint32_t addr, char* name, int fd)
 {
@@ -155,14 +184,14 @@ void regshow(uint32_t addr, char* name, int fd)
     target = (off_t)addr;
     map_base = mmap(0, MAP_SIZE, PROT_READ, MAP_SHARED, fd, target & ~MAP_MASK);
     virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
-    LogVerbose("%s (0x%08X): 0x%08X\r\n", name, addr, *((unsigned long*)virt_addr));
+    LogVerbose("%s (0x%08X): 0x%08X\r\n", name, addr, *((uint32_t *)virt_addr));
     munmap(map_base, MAP_SIZE);
 }
 
 void imx6sx_clk_enable(int fd)
 {
     off_t target;
-    unsigned long read_result;
+    uint32_t read_result;
     void *map_base, *virt_addr;
 
     LogVerbose("i.MX6SX specific function for M4 clock enabling!\n");
@@ -171,8 +200,8 @@ void imx6sx_clk_enable(int fd)
     target = (off_t)IMX6SX_CCM_CCGR3; /* M4 Clock gate*/
     map_base = mmap(0, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
     virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
-    read_result = *((unsigned long*)virt_addr);
-    *((unsigned long*)virt_addr) = read_result | 0x0000000C;
+    read_result = *((uint32_t*)virt_addr);
+    *((uint32_t*)virt_addr) = read_result | 0x0000000C;
     munmap(map_base, MAP_SIZE);
     regshow(IMX6SX_CCM_CCGR3, "CCM_CCGR3", fd);
     LogVerbose("CCM_CCGR3 done\n");
@@ -181,7 +210,7 @@ void imx6sx_clk_enable(int fd)
 void imx7d_clk_enable(int fd)
 {
     off_t target;
-    unsigned long read_result;
+    uint32_t read_result;
     void *map_base, *virt_addr;
 
     LogVerbose("i.MX7D specific function for M4 clock enabling!\n");
@@ -192,7 +221,7 @@ void imx7d_clk_enable(int fd)
     map_base = mmap(0, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
     virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
     /* clock enabled by clearing the bit!  */
-    *((unsigned long*)virt_addr) = (*((unsigned long*)virt_addr)) & (~(1 << 5));
+    *((uint32_t*)virt_addr) = (*((uint32_t*)virt_addr)) & (~(1 << 5));
     munmap(map_base, MAP_SIZE);
     regshow(IMX7D_CCM_ANALOG_PLL_480, "CCM_ANALOG_PLL_480", fd);
     LogVerbose("CCM_ANALOG_PLL_480 done\n");
@@ -202,7 +231,7 @@ void imx7d_clk_enable(int fd)
     target = (off_t)(IMX7D_CCM_CCGR1+4); /* CCM_CCGR1_SET */
     map_base = mmap(0, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
     virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
-    *((unsigned long*)virt_addr) = 0x00000003;
+    *((uint32_t*)virt_addr) = 0x00000003;
     munmap(map_base, MAP_SIZE);
     regshow(IMX7D_CCM_CCGR1, "CCM1_CCGR1", fd);
     LogVerbose("CCM_CCGR1_SET done\n");
@@ -234,6 +263,19 @@ static struct soc_specific socs[] = {
         imx6sx_clk_enable,
 
         IMX6SX_M4_BOOTROM
+    },
+    {
+        "i.MX8MM",
+        IMX8MM_SRC_M4RCR,
+        IMX8MM_START_CLEAR_MASK,
+        IMX8MM_START_SET_MASK,
+        IMX8MM_STOP_CLEAR_MASK,
+        IMX8MM_STOP_SET_MASK,
+        IMX8MM_MU_ATR1,
+
+        NULL,
+
+        IMX8MM_M4_BOOTROM
     }
 };
 
@@ -268,18 +310,19 @@ void rpmsg_mu_kick(int fd, int socid, uint32_t vq_id)
     map_base = mmap(0, SIZE_4BYTE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
     virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
     vq_id = (vq_id << 16);
-    *((unsigned long*)virt_addr) = vq_id;
+    *((uint32_t*)virt_addr) = vq_id;
     munmap(map_base, SIZE_4BYTE);
 }
 
 void ungate_m4_clk(int fd, int socid)
 {
-    socs[socid].clk_enable(fd);
+    LogVerbose("Ungatexx");
+    //socs[socid].clk_enable(fd);
 }
 
 void stop_cpu(int fd, int socid)
 {
-    unsigned long read_result;
+    uint32_t read_result;
     off_t target;
     void *map_base, *virt_addr;
 
@@ -290,12 +333,12 @@ void stop_cpu(int fd, int socid)
     target = (off_t)socs[socid].src_m4reg_addr;
     map_base = mmap(0, SIZE_4BYTE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
     virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
-    read_result = *((unsigned long*)virt_addr);
+    read_result = *((uint32_t *)virt_addr);
 
     if (!strcmp("i.MX7 Dual", socs[socid].detect_name)){
       /* A special handling as not tested on MX6 yet. */
-      *((unsigned long*)virt_addr) = (read_result & (socs[socid].stop_and)) | IMX7D_SW_M4C_NON_SCLR_RST;
-      read_result = *((unsigned long*)virt_addr);
+      *((uint32_t*)virt_addr) = (read_result & (socs[socid].stop_and)) | IMX7D_SW_M4C_NON_SCLR_RST;
+      read_result = *((uint32_t*)virt_addr);
       assert(read_result & IMX7D_SW_M4C_NON_SCLR_RST);
 
       /* After setting non-self clearing, the M4RCR is the same (at least for M4 reset and enable bits)
@@ -313,31 +356,51 @@ void stop_cpu(int fd, int socid)
       wait_bits_cleared( virt_addr,
           (read_result & (socs[socid].stop_and) ) | (IMX7D_SW_M4P_RST | IMX7D_SW_M4C_NON_SCLR_RST),
               IMX7D_SW_M4P_RST );
-      read_result = *((unsigned long*)virt_addr);
+      read_result = *((uint32_t*)virt_addr);
       LogVerbose("%s - M4RCR val after M4P_RST  = 0x%08lX ..\n", NAME_OF_UTILITY, read_result);
     }
-    else {
+
+    if (!strcmp("i.MX6 SoloX",socs[socid].detect_name)) {
 
       LogVerbose("%s - M4RCR value before stop = 0x%08lX ..\n", NAME_OF_UTILITY, read_result);
         // NEED TO HOLD CORE IN RESET OTHERWISE BAD THINGS HAPPEN - EVERYTHING MIGHT FREEZE
-        *((unsigned long*)virt_addr) = (read_result & (socs[socid].stop_and)) | IMX6SX_SW_M4C_NON_SCLR_RST;
-        read_result = *((unsigned long*)virt_addr);
+        *((uint32_t*)virt_addr) = (read_result & (socs[socid].stop_and)) | IMX6SX_SW_M4C_NON_SCLR_RST;
+        read_result = *((uint32_t*)virt_addr);
         assert(read_result & IMX6SX_SW_M4C_NON_SCLR_RST);
 
         wait_bits_cleared( virt_addr,
                            (read_result & (socs[socid].stop_and) ) | (IMX6SX_SW_M4P_RST | IMX6SX_SW_M4C_NON_SCLR_RST),
                            IMX6SX_SW_M4P_RST );
 
-        read_result = *((unsigned long*)virt_addr);
+        read_result = *((uint32_t*)virt_addr);
       LogVerbose("%s - M4RCR value after reset  = 0x%08lX ..\n", NAME_OF_UTILITY, read_result);
     }
+
+    if (!strcmp("i.MX8MM",socs[socid].detect_name)) {
+        *((uint32_t*)virt_addr) = (read_result & (socs[socid].stop_and)) | IMX8MM_SW_M4C_NON_SCLR_RST;
+        read_result = *((uint32_t*)virt_addr);
+        assert(read_result & IMX8MM_SW_M4C_NON_SCLR_RST);
+
+
+
+        LogVerbose("%s - M4RCR val after M4C_NON_SCLR_RST stop = 0x%08lX ..\n", NAME_OF_UTILITY, read_result);
+        wait_bits_cleared( virt_addr,
+                           (read_result & (socs[socid].stop_and) ) | (IMX8MM_SW_M4P_RST | IMX8MM_SW_M4C_NON_SCLR_RST),
+                           IMX8MM_SW_M4P_RST );
+        read_result = *((uint32_t *)virt_addr);
+        LogVerbose("%s - M4RCR val after M4P_RST  = 0x%08lX ..\n", NAME_OF_UTILITY, read_result);
+
+    }
+
+
+
     munmap(virt_addr, SIZE_4BYTE);
     regshow(socs[socid].src_m4reg_addr, "STOP - after", fd);
 }
 
 void start_cpu(int fd, int socid)
 {
-    unsigned long read_result;
+    uint32_t read_result;
     off_t target;
     void *map_base, *virt_addr;
 
@@ -348,7 +411,7 @@ void start_cpu(int fd, int socid)
     target = (off_t)socs[socid].src_m4reg_addr;
     map_base = mmap(0, SIZE_4BYTE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
     virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
-    read_result = *((unsigned long*)virt_addr);
+    read_result = *((uint32_t *)virt_addr);
 
 
     if (!strcmp("i.MX7 Dual", socs[socid].detect_name)){
@@ -358,14 +421,24 @@ void start_cpu(int fd, int socid)
             (read_result & (socs[socid].start_and)) | socs[socid].start_or,
             IMX7D_SW_M4C_RST );
     }
-    else
-    {
+
+
+    if (!strcmp("i.MX6 SoloX",socs[socid].detect_name)) {
 
         wait_bits_cleared( virt_addr,
                            (read_result & (socs[socid].start_and)) | socs[socid].start_or ,
                            IMX6SX_SW_M4C_RST );
 
     }
+
+    if (!strcmp("i.MX8MM",socs[socid].detect_name)){
+
+        wait_bits_cleared( virt_addr,
+                           (read_result & (socs[socid].start_and)) | socs[socid].start_or,
+                           IMX8MM_SW_M4C_RST );
+
+    }
+
     munmap(virt_addr, SIZE_4BYTE);
     regshow(socs[socid].src_m4reg_addr, "START -after", fd);
 }
@@ -373,17 +446,17 @@ void start_cpu(int fd, int socid)
 void set_stack_pc(int fd, int socid, unsigned int stack, unsigned int pc)
 {
     off_t target = (off_t)socs[socid].stack_pc_addr;
-    unsigned long read_result;
+    uint32_t read_result;
     void *map_base, *virt_addr;
     map_base = mmap(0, SIZE_16BYTE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
     virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
-    *((unsigned long*)virt_addr) = stack;
+    *((uint32_t*)virt_addr) = stack;
     virt_addr = (unsigned char*)(map_base + ((target + 0x4) & MAP_MASK));
-    *((unsigned long*)virt_addr) = pc;
+    *((uint32_t*)virt_addr) = pc;
     munmap(map_base, SIZE_16BYTE);
 }
 
-int check_load_addr(unsigned long* ldaddr, char* mt, unsigned long pc)
+int check_load_addr(uint32_t* ldaddr, char* mt, uint32_t pc)
 {
   /* Check if where we loading to looks familiar. Also if the address looks like an M4 address,
    * return A7/A9 instead. Return 0(false) on any error.
@@ -438,7 +511,7 @@ int check_load_addr(unsigned long* ldaddr, char* mt, unsigned long pc)
   return ret;
 }
 
-int load_m4_fw(int fd, int socid, char* filepath, unsigned long loadaddr)
+int load_m4_fw(int fd, int socid, char* filepath, uint32_t loadaddr)
 {
     int n;
     int size;
@@ -446,7 +519,7 @@ int load_m4_fw(int fd, int socid, char* filepath, unsigned long loadaddr)
     off_t target;
     uint8_t* filebuffer;
     void *map_base, *virt_addr;
-    unsigned long stack, pc;
+    uint32_t stack, pc;
     char mt = '\0';
     size_t ocrsz;
 
@@ -549,13 +622,37 @@ int get_board_id(void)
     }
 
     fclose(fp);
+
+
+    if (result == -1) { //proc/cpuinfo does not contain "Hardware" field, let's check /var/log/messages boot log
+        fp = fopen("/var/log/messages", "r");
+        if (fp == NULL)
+            return result;
+
+        while (fgets(out, sizeof(out) - 1, fp) != NULL) {
+            if (strstr(out, "CPU identified as")) {
+                for (i = 0; i < (sizeof(socs) / sizeof(struct soc_specific)); i++) {
+                    if (strstr(out, socs[i].detect_name)) {
+                        result = i;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+
+        fclose(fp);
+
+    }
+
+
     return result;
 }
 
 int main(int argc, char** argv)
 {
     int fd, n;
-    unsigned long loadaddr;
+    uint32_t loadaddr;
     char* p;
     char m4IsStopped = 0;
     char m4IsRunning = 0;
@@ -586,12 +683,16 @@ int main(int argc, char** argv)
         return RETURN_CODE_ARGUMENTS_ERROR;
     }
 
+    LogError("\nDetected board: %s\n",socs[currentSoC].detect_name);
+
     fd = open("/dev/mem", O_RDWR | O_SYNC);
     if (fd < 0) {
         LogError(HEADER);
         LogError("Could not open /dev/mem, are you root?\n");
         return RETURN_CODE_ARGUMENTS_ERROR;
     }
+
+
 
     /* PARTIAL COMMANDS */
     if (!strcmp(argv[1], "stop")) {
@@ -665,10 +766,10 @@ void timediff(const struct timespec* start, const struct timespec* end, struct t
 }
 
 /* Helpers */
-void wait_bits_cleared(unsigned long *vaddr, unsigned long wval, unsigned long mask)
+void wait_bits_cleared(uint32_t *vaddr, uint32_t wval, uint32_t mask)
 {
 
-  unsigned long read_result;
+  uint32_t read_result;
   struct timespec start = {0, 0}, end = {0,0}, td= {0,0};
   const unsigned NANOS_MAX = 10000000;
   unsigned iters= 0;
