@@ -142,6 +142,8 @@
 #define SIZE_16BYTE 16UL
 #define MAP_OCRAM_IMX6_SIZE (IMX6SX_OCRAM_END_ADDR-IMX6SX_OCRAM_START_ADDR+1)
 #define MAP_OCRAM_IMX7_SIZE (IMX7D_OCRAM_END_ADDR-IMX7D_OCRAM_START_ADDR+1)
+#define MAP_OCRAM_IMX8MM_SIZE (IMX8MM_OCRAM_END_ADDR-IMX8MM_OCRAM_START_ADDR+1)
+
 #define MAP_OCRAM_MASK(rz) ((rz) - 1)
 #define MAX_RETRIES 8
 #define MAX_FILE_SIZE_TCM (32 * 1024)
@@ -237,6 +239,23 @@ void imx7d_clk_enable(int fd)
     LogVerbose("CCM_CCGR1_SET done\n");
 }
 
+void imx8mm_clk_enable(int fd)
+{
+    off_t target;
+    uint32_t read_result;
+    void *map_base, *virt_addr;
+
+    LogVerbose("i.MX8MM specific function for M4 clock enabling!\n");
+
+
+    regshow(IMX7D_CCM_CCGR1, "CCM1_CCGR1", fd);
+
+    //TODO: Unfinished biznizs
+    //
+    //
+
+}
+
 static struct soc_specific socs[] = {
     {
         "i.MX7 Dual",
@@ -273,7 +292,7 @@ static struct soc_specific socs[] = {
         IMX8MM_STOP_SET_MASK,
         IMX8MM_MU_ATR1,
 
-        NULL,
+        imx8mm_clk_enable,
 
         IMX8MM_M4_BOOTROM
     }
@@ -281,7 +300,8 @@ static struct soc_specific socs[] = {
 
 enum sock_id_t {
   SOCK_ID_IMX7 = 0,
-  SOCK_ID_IMX6 = 1
+  SOCK_ID_IMX6 = 1,
+  SOCK_ID_IMX8MM = 2,
 };
 
 size_t map_ocram_size(int soc_id) {
@@ -289,6 +309,8 @@ size_t map_ocram_size(int soc_id) {
     return MAP_OCRAM_IMX7_SIZE;
   else if (SOCK_ID_IMX6==soc_id)
     return MAP_OCRAM_IMX6_SIZE;
+  else if(SOCK_ID_IMX8MM==soc_id)
+    return MAP_OCRAM_IMX8MM_SIZE;
   return 0;
 }
 
@@ -316,8 +338,7 @@ void rpmsg_mu_kick(int fd, int socid, uint32_t vq_id)
 
 void ungate_m4_clk(int fd, int socid)
 {
-    LogVerbose("Ungatexx");
-    //socs[socid].clk_enable(fd);
+    socs[socid].clk_enable(fd);
 }
 
 void stop_cpu(int fd, int socid)
@@ -506,6 +527,22 @@ int check_load_addr(uint32_t* ldaddr, char* mt, uint32_t pc)
         *mt = 't';
       }
       break;
+    case 2:
+        if ( (IMX8MM_OCRAM_START_ADDR < pc && pc < IMX8MM_OCRAM_END_ADDR)  ||
+             (IMX8MM_OCRAM_M4_ALIAS_START_ADDR < pc && pc < IMX8MM_OCRAM_M4_ALIAS_END_ADDR) ){
+            ret = 1;
+            *ldaddr = IMX8MM_OCRAM_START_ADDR + (pc & 0x00078000);  /* Align */
+            *mt = 'o';
+        }
+        else if ( (IMX_TCM_START_ADDR < pc && pc < IMX_TCM_END_ADDR) ||
+                  (IMX_TCM_M4_START_ADDR < pc && pc < IMX_TCM_M4_END_ADDR) ){
+            ret = 1;
+            //Note: expects you to load it to TCML, by-the-book
+            *ldaddr = IMX_TCM_START_ADDR; /* Align */
+            *mt = 't';
+        }
+          break;
+
   }//switch(..)
 
   return ret;
