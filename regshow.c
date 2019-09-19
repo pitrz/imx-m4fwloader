@@ -19,7 +19,7 @@ void regshow(uint32_t reg, int fd)
 
     target = (off_t)reg;
     map_base = mmap(0, MAP_SIZE, PROT_READ, MAP_SHARED, fd, target & ~MAP_MASK);
-    virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
+    virt_addr = (uint32_t *)(map_base + (target & MAP_MASK));
     printf("(0x%08X): 0x%08X\r\n", reg, *((uint32_t *)virt_addr));
     munmap(map_base, MAP_SIZE);
 }

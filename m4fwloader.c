@@ -119,22 +119,26 @@
 #define IMX8MM_MU_ATR1                     (0x30AA0004) /* rpmsg_mu_kick_addr */
 #define IMX8MM_M4_BOOTROM                  (0x00180000)
 
-//#define IMX7D_CCM_ANALOG_PLL_480          (0x303600B0)
-#define IMX8MM_CCM_CCGR1                   (0x30384010)
+#define IMX8MM_CCM_TARGET_ROOT1            (0x30388080)
 
 #define IMX8MM_OCRAM_START_ADDR            (0x00900000)
 #define IMX8MM_OCRAM_END_ADDR              (0x0093FFFF) /* OCRAM 128KB + OCRAM 128KB */
-#define IMX8MM_OCRAM_M4_ALIAS_START_ADDR   (0x20200000)
-#define IMX8MM_OCRAM_M4_ALIAS_END_ADDR     (0x2023FFFF) /* OCRAM 128KB + OCRAM 128KB */
+#define IMX8MM_OCRAM_M4_ALIAS_START_ADDR   (0x00900000)
+#define IMX8MM_OCRAM_M4_ALIAS_END_ADDR     (0x0093FFFF) /* OCRAM 128KB + OCRAM 128KB */
 
 
-
-
-// TODO: VALIDATE TCM RANGES FOR IMX8M
 #define IMX_TCM_START_ADDR       (0x007F8000) /* TCML  32KB */
 #define IMX_TCM_END_ADDR         (0x00807FFF) /* TCMU  32KB */
 #define IMX_TCM_M4_START_ADDR    (0x1FFF8000) /* TCML  32KB */
 #define IMX_TCM_M4_END_ADDR      (0x20007FFF) /* TCMU  32KB */
+
+// IMX8MM Has more TCM
+#define IMX8MM_TCM_START_ADDR       (0x007E0000) /* TCML  128KB */
+#define IMX8MM_TCM_END_ADDR         (0x0081FFFF) /* TCMU  128KB */
+#define IMX8MM_TCM_M4_START_ADDR    (0x1FFE0000) /* TCML  128KB */
+#define IMX8MM_TCM_M4_END_ADDR      (0x2001FFFF) /* TCMU  128KB */
+
+
 
 #define MAP_SIZE 4096UL
 #define MAP_MASK (MAP_SIZE - 1)
@@ -146,7 +150,7 @@
 
 #define MAP_OCRAM_MASK(rz) ((rz) - 1)
 #define MAX_RETRIES 8
-#define MAX_FILE_SIZE_TCM (32 * 1024)
+#define MAX_FILE_SIZE_TCM (128 * 1024)
 
 #define RETURN_CODE_OK 0
 #define RETURN_CODE_ARGUMENTS_ERROR 1
@@ -251,7 +255,7 @@ void imx8mm_clk_enable(int fd)
     regshow(IMX7D_CCM_CCGR1, "CCM1_CCGR1", fd);
 
     //TODO: Unfinished biznizs
-    //
+    // Set Target root to 0x14000001
     //
 
 }
@@ -534,11 +538,11 @@ int check_load_addr(uint32_t* ldaddr, char* mt, uint32_t pc)
             *ldaddr = IMX8MM_OCRAM_START_ADDR + (pc & 0x00078000);  /* Align */
             *mt = 'o';
         }
-        else if ( (IMX_TCM_START_ADDR < pc && pc < IMX_TCM_END_ADDR) ||
-                  (IMX_TCM_M4_START_ADDR < pc && pc < IMX_TCM_M4_END_ADDR) ){
+        else if ( (IMX8MM_TCM_START_ADDR < pc && pc < IMX8MM_TCM_END_ADDR) ||
+                  (IMX8MM_TCM_M4_START_ADDR < pc && pc < IMX8MM_TCM_M4_END_ADDR) ){
             ret = 1;
             //Note: expects you to load it to TCML, by-the-book
-            *ldaddr = IMX_TCM_START_ADDR; /* Align */
+            *ldaddr = IMX8MM_TCM_START_ADDR; /* Align */
             *mt = 't';
         }
           break;
@@ -551,7 +555,7 @@ int check_load_addr(uint32_t* ldaddr, char* mt, uint32_t pc)
 int load_m4_fw(int fd, int socid, char* filepath, uint32_t loadaddr)
 {
     int n;
-    int size;
+    int size,size1;
     FILE* fdf;
     off_t target;
     uint8_t* filebuffer;
@@ -570,8 +574,18 @@ int load_m4_fw(int fd, int socid, char* filepath, uint32_t loadaddr)
         LogError("%s - FAIL: File size too big, I wouldn't know how to load it: %d > %d. Bailing out.\n", NAME_OF_UTILITY, size, max_file_size(socid));
         return -2;
     }
+    LogVerbose("Presize 0x%08x\n",size);
 
-    filebuffer = malloc(size + 1);
+    //Check for file size to get good size of buffer
+    if ((size & 0x0000000f) != 0) {
+        //Alignment for memcopy won't work, need to add
+        size1 = size + (0xf - (size & 0x0000000f))+1;
+    }
+
+    LogVerbose("Postsize 0x%08x\n",size1);
+
+    filebuffer = malloc(size1 + 1);
+    memset(filebuffer,0,size1+1);
     if (size != fread(filebuffer, sizeof(char), size, fdf)) {
         free(filebuffer);
         return -2;
@@ -614,6 +628,8 @@ int load_m4_fw(int fd, int socid, char* filepath, uint32_t loadaddr)
     //Beware boundaries not checked too, e.g. if loadaddr is in middle of OCRAM and size goes over
     //the end, prepare for happy surprise.
     ocrsz = map_ocram_size(socid);
+    LogVerbose("Ocr size: 0x%08x\n",ocrsz);
+    LogVerbose("The mask 0x%08x\n",loadaddr & ~MAP_OCRAM_MASK(ocrsz));
 
     map_base = mmap(0, ocrsz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, loadaddr & ~MAP_OCRAM_MASK(ocrsz));
     LogVerbose("%s: mmap'ed start - end (0x%08x - 0x%08x)\n",
@@ -621,10 +637,14 @@ int load_m4_fw(int fd, int socid, char* filepath, uint32_t loadaddr)
         loadaddr & ~MAP_OCRAM_MASK(ocrsz),
         (loadaddr & ~MAP_OCRAM_MASK(ocrsz)) + ocrsz );
 
-    virt_addr = (unsigned char*)(map_base + (loadaddr & MAP_OCRAM_MASK(ocrsz)));
-    LogVerbose("%s: mmap'ed vbase, virt_addr: 0x%08x,  0x%08x\n", NAME_OF_UTILITY, map_base, virt_addr);
 
-    memcpy(virt_addr, filebuffer, size);
+
+    virt_addr = (unsigned char*)(map_base + (loadaddr & MAP_OCRAM_MASK(ocrsz)));
+
+    LogVerbose("%s: mmap'ed vbase, virt_addr: 0x%08x,  0x%08x\n", NAME_OF_UTILITY, map_base, virt_addr);
+    LogVerbose("The load offset: 0x%08x , 0x%08x \n",loadaddr & MAP_OCRAM_MASK(ocrsz),size);
+
+    memcpy(virt_addr, filebuffer, size1);
     munmap(map_base, ocrsz);
 
     LogVerbose("%s: Will set PC %x and STACK %x...", NAME_OF_UTILITY, pc, stack);
