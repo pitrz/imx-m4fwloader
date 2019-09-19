@@ -249,14 +249,19 @@ void imx8mm_clk_enable(int fd)
     uint32_t read_result;
     void *map_base, *virt_addr;
 
-    LogVerbose("i.MX8MM specific function for M4 clock enabling!\n");
+    LogVerbose(" i.MX8MM specific function for M4 clock enabling!\n");
 
+    /* ENABLE CLK */
+    regshow(IMX8MM_CCM_TARGET_ROOT1, "IMX8MM_CCM_TARGET_ROOT1", fd);
+    target = (off_t)(IMX8MM_CCM_TARGET_ROOT1);
+    map_base = mmap(0, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, target & ~MAP_MASK);
+    virt_addr = (unsigned char*)(map_base + (target & MAP_MASK));
+    *((uint32_t*)virt_addr) = 0x14000001; //set PLL1
 
-    regshow(IMX7D_CCM_CCGR1, "CCM1_CCGR1", fd);
+    munmap(map_base, MAP_SIZE);
+    regshow(IMX8MM_CCM_TARGET_ROOT1, "IMX8MM_CCM_TARGET_ROOT1", fd);
+    LogVerbose("IMX8MM_CCM_TARGET_ROOT1 done\n");
 
-    //TODO: Unfinished biznizs
-    // Set Target root to 0x14000001
-    //
 
 }
 
@@ -580,9 +585,9 @@ int load_m4_fw(int fd, int socid, char* filepath, uint32_t loadaddr)
     if ((size & 0x0000000f) != 0) {
         //Alignment for memcopy won't work, need to add
         size1 = size + (0xf - (size & 0x0000000f))+1;
-    }
+    } else size1=size;
 
-    LogVerbose("Postsize 0x%08x\n",size1);
+    LogVerbose("PosSSSSStsize 0x%08x\n",size1);
 
     filebuffer = malloc(size1 + 1);
     memset(filebuffer,0,size1+1);
@@ -795,11 +800,13 @@ int main(int argc, char** argv)
         }
     }
 
+    LogVerbose("Will ungate M4 clock source...\n");
+    ungate_m4_clk(fd, currentSoC);
+
+
     LogVerbose("LoadAddr is: %X\n", loadaddr);
     LogVerbose("Will stop CPU now...\n");
     stop_cpu(fd, currentSoC);
-    LogVerbose("Will ungate M4 clock source...\n");
-    ungate_m4_clk(fd, currentSoC);
     LogVerbose("Will load M4 firmware...\n");
     load_m4_fw(fd, currentSoC, filepath, loadaddr);
     LogVerbose("Will start CPU now...\n");
